@@ -44,6 +44,10 @@ export DEB_BUILD_OPTIONS="parallel=$(nproc)"
 # Never go full interactive on any packages
 export DEBIAN_FRONTEND="noninteractive"
 
+if [ -n "${PKG_SOURCE}" ] ; then
+	PKG_DEBUG=1;
+fi
+
 # Source helper functions
 . scripts/functions.sh
 
@@ -406,7 +410,11 @@ build_dpkg() {
 	prebuild="$3"
 	subarg="$4"
 	generate_version="$5"
-	deflags="-us -uc -b"
+	if [ -n "${PKG_SOURCE}" ]; then
+		deflags="-us -uc -F"
+	else
+		deflags="-us -uc -b"
+	fi
 
 	# Check if we have a valid sub directory for these sources
 	if [ -z "$subarg" -o "$subarg" = "null" ] ; then
@@ -452,13 +460,23 @@ build_dpkg() {
 		fi
 	fi
 
-
+	if [ -z "${PKG_SOURCE}" ]; then
 	# Make a programatically generated version for this build
 	if [ "$generate_version" != "false" ] ; then
 		DATESTAMP=$(date +%Y%m%d%H%M%S)
 		chroot ${DPKG_OVERLAY} /bin/bash -c "cd $srcdir && dch -b -M -v ${DATESTAMP}~truenas+1 --force-distribution --distribution bullseye-truenas-unstable 'Tagged from truenas-build'" || exit_err "Failed dch changelog"
 	else
 		chroot ${DPKG_OVERLAY} /bin/bash -c "cd $srcdir && dch -b -M --force-distribution --distribution bullseye-truenas-unstable 'Tagged from truenas-build'" || exit_err "Failed dch changelog"
+	fi
+	else
+		echo "Skipping changing changelog"
+		package_name=$(chroot ${DPKG_OVERLAY} /usr/bin/dpkg-parsechangelog --show-field Source -l $srcdir/debian/changelog)
+		package_version=$(chroot ${DPKG_OVERLAY} /usr/bin/dpkg-parsechangelog --show-field Version -l $srcdir/debian/changelog | cut -d "-" -f 1)
+		echo "PACKAGE IS $package_name and package version is $package_version"
+		new_dir="${srcdir}_new"
+		chroot ${DPKG_OVERLAY} /usr/bin/cp -a $srcdir $new_dir
+		chroot ${DPKG_OVERLAY} /usr/bin/rm -rf "${new_dir}/debian"
+		chroot ${DPKG_OVERLAY} /usr/bin/tar -czvf "${package_name}_${package_version}.orig.tar.gz" -C $new_dir . 1>/dev/null
 	fi
 
 	# Build the package
@@ -471,6 +489,11 @@ build_dpkg() {
 			chroot ${DPKG_OVERLAY} /bin/bash
 		fi
 		exit_err "Failed to build packages"
+	fi
+
+	if [ -n "${PKG_SOURCE}" ]; then
+		echo "Falling to shell"
+		chroot ${DPKG_OVERLAY} /bin/bash
 	fi
 
 	# Move out the resulting packages
